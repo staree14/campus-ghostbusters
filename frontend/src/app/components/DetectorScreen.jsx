@@ -48,8 +48,7 @@ export function DetectorScreen({ agentName }) {
   const [ghostPos, setGhostPos] = useState(null);
   const [tapCount, setTapCount] = useState(0);
 
-  // Camera AR Mode State
-  const [cameraMode, setCameraMode] = useState(false);
+  // Camera Ref
   const videoRef = useRef(null);
 
   // Radar sweep animation
@@ -58,6 +57,30 @@ export function DetectorScreen({ agentName }) {
       setRotation((prev) => (prev + 2) % 360);
     }, 30);
     return () => clearInterval(interval);
+  }, []);
+
+  // Always-on Camera
+  useEffect(() => {
+    let stream = null;
+    const startCamera = async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment' }
+        });
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+      } catch (err) {
+        setLogs((prev) => [...prev.slice(-4), 'CAMERA ERROR: ACCESS DENIED'].slice(-5));
+      }
+    };
+    startCamera();
+
+    return () => {
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+      }
+    };
   }, []);
 
   // Geolocation tracking
@@ -123,38 +146,13 @@ export function DetectorScreen({ agentName }) {
     return () => navigator.geolocation.clearWatch(watchId);
   }, [ghostPos, ghostVisible]);
 
-  // Handle opening AR Camera Mode
-  const handleOpenAR = async () => {
-    if (signalStrength === 'very-strong') {
-      try {
-        setCameraMode(true);
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment' }
-        });
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-      } catch (err) {
-        setLogs((prev) => [...prev.slice(-4), 'CAMERA ERROR: ACCESS DENIED'].slice(-5));
-        setCameraMode(false);
-      }
-    }
-  };
-
-  // Handle capturing ghost in AR
+  // Handle capturing ghost
   const handleCapture = () => {
     setCaptured(true);
     setLogs((prev) => [...prev.slice(-4), '>>> GHOST CAPTURED! <<<', 'LOGGING PARANORMAL ENTITY...'].slice(-5));
 
-    // Stop camera stream
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject;
-      stream.getTracks().forEach((track) => track.stop());
-    }
-
     setTimeout(() => {
       setCaptured(false);
-      setCameraMode(false);
       setSignalStrength('none');
       setGhostVisible(false);
       setGhostPos(null); // Reset ghost position so a new one spawns next tick
@@ -180,224 +178,189 @@ export function DetectorScreen({ agentName }) {
     }
   };
 
-  // --- AR CAMERA SCREEN ---
-  if (cameraMode) {
-    return (
-      <div className="fixed inset-0 bg-black flex flex-col">
-        {/* Underlay Video */}
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          className="absolute inset-0 w-full h-full object-cover z-0" />
+  return (
+    <div className="fixed inset-0 bg-black flex flex-col text-[#00ff9c] overflow-hidden">
+      {/* Background Camera */}
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        className="absolute inset-0 w-full h-full object-cover z-0 opacity-40" />
 
+      {/* Global Dark Overlay to make green UI pop */}
+      <div className="absolute inset-0 z-0 pointer-events-none bg-gradient-to-t from-black via-black/50 to-black/80" />
 
-        {/* Ghost Overlay */}
-        <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
-          <div
-            className="text-8xl mb-20 animate-bounce"
-            style={{
-              filter: 'drop-shadow(0 0 20px #ff3b3b)',
-              opacity: captured ? 0 : 0.8,
-              transition: 'opacity 0.5s',
-              animation: captured ? 'spin 1s ease-in' : 'float 3s ease-in-out infinite'
-            }}>
-
-            👻
+      {/* Primary UI */}
+      <div className="relative z-10 flex-1 flex flex-col px-6 py-6 pointer-events-auto">
+        {/* Header */}
+        <div
+          className="text-center mb-6 select-none cursor-pointer"
+          onClick={() => {
+            setTapCount(c => c + 1);
+            if (tapCount >= 4) {
+              setSignalStrength('very-strong');
+              setDistance(0);
+              setLogs(prev => [...prev.slice(-4), 'MANUAL OVERRIDE: ENTITY SUMMONED'].slice(-5));
+            }
+          }}
+        >
+          <h1 className="text-xl mb-1 tracking-wider" style={{ textShadow: '0 0 10px #00ff9c' }}>
+            PARANORMAL DETECTION SYSTEM
+          </h1>
+          <div className="text-xs opacity-70 mb-2">Ghost Hunter Radar</div>
+          <div className="flex justify-between text-xs font-mono px-4">
+            <span>Agent: {agentName}</span>
+            <span>{distance !== null ? `${distance.toFixed(1)}m` : 'CALCULATING...'}</span>
           </div>
         </div>
 
-        {/* UI Overlay */}
-        <div className="absolute inset-0 z-20 flex flex-col justify-between p-6 bg-gradient-to-t from-black/80 via-transparent to-black/80">
-          <div className="text-center pt-8">
-            <div className="text-xl tracking-widest text-red-500 font-bold mb-2 animate-pulse">
-              ENTITY TARGET ACQUIRED
-            </div>
-            <div className="text-[#00ff9c] font-mono text-sm">DISTANCE: {distance?.toFixed(1)}m</div>
-          </div>
-
-          <div className="pb-8">
-            <button
-              onClick={handleCapture}
-              disabled={captured}
-              className="w-full py-4 rounded-xl border-2 tracking-wider transition-all font-bold text-xl active:scale-95 disabled:opacity-50"
+        {/* Radar */}
+        <div className="flex-1 flex items-center justify-center mb-6 relative">
+          <div className="relative">
+            {/* Radar circle */}
+            <div
+              className="w-64 h-64 rounded-full relative border-2"
               style={{
-                borderColor: '#ff3b3b',
-                backgroundColor: 'rgba(255, 59, 59, 0.2)',
-                color: '#ff3b3b'
+                borderColor: getSignalColor(),
+                backgroundColor: 'rgba(0, 255, 156, 0.05)',
+                boxShadow: `0 0 30px ${getSignalColor()}40`
               }}>
 
-              {captured ? 'CAPTURED!' : 'SNAP PICTURE'}
-            </button>
+              {/* Grid lines */}
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="w-full h-px" style={{ backgroundColor: getSignalColor(), opacity: 0.3 }} />
+              </div>
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="w-px h-full" style={{ backgroundColor: getSignalColor(), opacity: 0.3 }} />
+              </div>
+              <div
+                className="absolute inset-8 rounded-full border"
+                style={{ borderColor: getSignalColor(), opacity: 0.3 }} />
+
+              <div
+                className="absolute inset-16 rounded-full border"
+                style={{ borderColor: getSignalColor(), opacity: 0.3 }} />
+
+
+              {/* Sweep line */}
+              <div
+                className="absolute inset-0 flex items-center justify-center"
+                style={{ transform: `rotate(${rotation}deg)`, transformOrigin: 'center' }}>
+
+                <div
+                  className="absolute h-px w-1/2 right-1/2"
+                  style={{
+                    background: `linear-gradient(to left, ${getSignalColor()}, transparent)`,
+                    boxShadow: `0 0 10px ${getSignalColor()}`
+                  }} />
+
+              </div>
+
+              {/* Center dot */}
+              <div
+                className="absolute top-1/2 left-1/2 w-2 h-2 rounded-full -translate-x-1/2 -translate-y-1/2"
+                style={{ backgroundColor: getSignalColor(), boxShadow: `0 0 10px ${getSignalColor()}` }} />
+
+            </div>
+
+            {/* Big central ghost when nearby */}
+            {ghostVisible &&
+              <div
+                className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-9xl z-50 pointer-events-none"
+                style={{
+                  filter: 'drop-shadow(0 0 30px #ff3b3b)',
+                  opacity: captured ? 0 : 1,
+                  transition: 'opacity 0.5s',
+                  animation: captured ? 'spin 1s ease-in' : 'float 3s ease-in-out infinite'
+                }}>
+                👻
+              </div>
+            }
           </div>
+        </div>
+
+        {/* Signal Strength */}
+        <div className="mb-6">
+          <div className="text-sm mb-2 text-center tracking-wider">SIGNAL STRENGTH</div>
+          <div className="flex justify-center gap-2 mb-2">
+            {[1, 2, 3, 4].map((bar) =>
+              <div
+                key={bar}
+                className="w-12 h-6 border-2 rounded transition-all"
+                style={{
+                  borderColor: getSignalColor(),
+                  backgroundColor: bar <= getSignalBars() ? getSignalColor() : 'transparent',
+                  boxShadow: bar <= getSignalBars() ? `0 0 10px ${getSignalColor()}` : 'none'
+                }} />
+
+            )}
+          </div>
+          <div className="text-center text-xs tracking-wider font-mono" style={{ color: getSignalColor() }}>
+            {signalStrength === 'none' && 'NO SIGNAL'}
+            {signalStrength === 'faint' && 'FAINT SIGNAL'}
+            {signalStrength === 'strong' && 'STRONG SIGNAL'}
+            {signalStrength === 'very-strong' && 'CRITICAL: ENTITY NEAR'}
+          </div>
+        </div>
+
+        {/* Capture Button */}
+        {signalStrength === 'very-strong' ? (
+          <button
+            onClick={handleCapture}
+            disabled={captured}
+            className="w-full py-4 rounded-xl border-2 tracking-wider transition-all font-bold text-xl active:scale-95 disabled:opacity-50 mb-6"
+            style={{
+              borderColor: '#ff3b3b',
+              backgroundColor: 'rgba(255, 59, 59, 0.2)',
+              color: '#ff3b3b',
+              boxShadow: '0 0 30px rgba(255, 59, 59, 0.8)',
+              animation: 'pulse 1s infinite'
+            }}>
+            {captured ? 'CAPTURED!' : 'SNAP PICTURE'}
+          </button>
+        ) : (
+          <div
+            className="w-full py-4 rounded-lg tracking-wider transition-all mb-6 text-center border-2"
+            style={{
+              backgroundColor: 'transparent',
+              borderColor: 'rgba(0, 255, 156, 0.3)',
+              color: 'rgba(0, 255, 156, 0.5)',
+            }}>
+            NOT IN RANGE
+          </div>
+        )}
+
+        {/* Terminal Log */}
+        <div
+          className="border-2 rounded p-4 space-y-1 min-h-[120px]"
+          style={{
+            borderColor: '#00ff9c',
+            backgroundColor: 'rgba(0, 255, 156, 0.05)'
+          }}>
+
+          <div className="text-xs mb-2 opacity-70">SYSTEM LOG:</div>
+          {logs.map((log, index) =>
+            <div key={index} className="text-xs font-mono">
+              {"\u003E"} {log}
+            </div>
+          )}
         </div>
 
         <style>{`
-          @keyframes spin {
-            100% { transform: rotate(360deg) scale(0); opacity: 0; }
-          }
-        `}</style>
-      </div>);
-
-  }
-
-  // --- RADAR SCREEN ---
-  return (
-    <div className="min-h-screen flex flex-col px-6 py-6" style={{ backgroundColor: '#0a0a0a', color: '#00ff9c' }}>
-      {/* Header */}
-      <div
-        className="text-center mb-6 select-none"
-        onClick={() => {
-          setTapCount(c => c + 1);
-          if (tapCount >= 4) {
-            setSignalStrength('very-strong');
-            setDistance(0);
-            setLogs(prev => [...prev.slice(-4), 'MANUAL OVERRIDE: ENTITY SUMMONED'].slice(-5));
-          }
-        }}
-      >
-        <h1 className="text-xl mb-1 tracking-wider" style={{ textShadow: '0 0 10px #00ff9c' }}>
-          PARANORMAL DETECTION SYSTEM
-        </h1>
-        <div className="text-xs opacity-70 mb-2">Ghost Hunter Radar</div>
-        <div className="flex justify-between text-xs font-mono px-4">
-          <span>Agent: {agentName}</span>
-          <span>{distance !== null ? `${distance.toFixed(1)}m` : 'CALCULATING...'}</span>
-        </div>
-      </div>
-
-      {/* Radar */}
-      <div className="flex-1 flex items-center justify-center mb-6 relative">
-        <div className="relative">
-          {/* Radar circle */}
-          <div
-            className="w-64 h-64 rounded-full relative border-2"
-            style={{
-              borderColor: getSignalColor(),
-              backgroundColor: 'rgba(0, 255, 156, 0.05)',
-              boxShadow: `0 0 30px ${getSignalColor()}40`
-            }}>
-
-            {/* Grid lines */}
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="w-full h-px" style={{ backgroundColor: getSignalColor(), opacity: 0.3 }} />
-            </div>
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="w-px h-full" style={{ backgroundColor: getSignalColor(), opacity: 0.3 }} />
-            </div>
-            <div
-              className="absolute inset-8 rounded-full border"
-              style={{ borderColor: getSignalColor(), opacity: 0.3 }} />
-
-            <div
-              className="absolute inset-16 rounded-full border"
-              style={{ borderColor: getSignalColor(), opacity: 0.3 }} />
-
-
-            {/* Sweep line */}
-            <div
-              className="absolute inset-0 flex items-center justify-center"
-              style={{ transform: `rotate(${rotation}deg)`, transformOrigin: 'center' }}>
-
-              <div
-                className="absolute h-px w-1/2 right-1/2"
-                style={{
-                  background: `linear-gradient(to left, ${getSignalColor()}, transparent)`,
-                  boxShadow: `0 0 10px ${getSignalColor()}`
-                }} />
-
-            </div>
-
-            {/* Center dot */}
-            <div
-              className="absolute top-1/2 left-1/2 w-2 h-2 rounded-full -translate-x-1/2 -translate-y-1/2"
-              style={{ backgroundColor: getSignalColor(), boxShadow: `0 0 10px ${getSignalColor()}` }} />
-
-          </div>
-
-          {/* Ghost indicator */}
-          {ghostVisible &&
-            <div
-              className="absolute top-1/4 left-1/2 -translate-x-1/2 text-4xl animate-bounce"
-              style={{
-                animation: 'float 2s ease-in-out infinite',
-                filter: 'drop-shadow(0 0 10px #ff3b3b)'
-              }}>
-
-              👻
-            </div>
-          }
-        </div>
-      </div>
-
-      {/* Signal Strength */}
-      <div className="mb-6">
-        <div className="text-sm mb-2 text-center tracking-wider">SIGNAL STRENGTH</div>
-        <div className="flex justify-center gap-2 mb-2">
-          {[1, 2, 3, 4].map((bar) =>
-            <div
-              key={bar}
-              className="w-12 h-6 border-2 rounded transition-all"
-              style={{
-                borderColor: getSignalColor(),
-                backgroundColor: bar <= getSignalBars() ? getSignalColor() : 'transparent',
-                boxShadow: bar <= getSignalBars() ? `0 0 10px ${getSignalColor()}` : 'none'
-              }} />
-
-          )}
-        </div>
-        <div className="text-center text-xs tracking-wider font-mono" style={{ color: getSignalColor() }}>
-          {signalStrength === 'none' && 'NO SIGNAL'}
-          {signalStrength === 'faint' && 'FAINT SIGNAL'}
-          {signalStrength === 'strong' && 'STRONG SIGNAL'}
-          {signalStrength === 'very-strong' && 'CRITICAL: ENTITY NEAR'}
-        </div>
-      </div>
-
-      {/* Capture Button */}
-      <button
-        onClick={handleOpenAR}
-        disabled={signalStrength !== 'very-strong'}
-        className="w-full py-4 rounded-lg tracking-wider transition-all mb-6 active:scale-95 disabled:opacity-20"
-        style={{
-          backgroundColor: signalStrength === 'very-strong' ? '#ff3b3b' : 'transparent',
-          border: `2px solid ${signalStrength === 'very-strong' ? '#ff3b3b' : '#00ff9c'}`,
-          color: signalStrength === 'very-strong' ? '#0a0a0a' : '#00ff9c',
-          boxShadow: signalStrength === 'very-strong' ?
-            '0 0 30px rgba(255, 59, 59, 0.8)' :
-            'none',
-          animation: signalStrength === 'very-strong' ? 'pulse 1s infinite' : 'none'
-        }}>
-
-        OPEN AR CAMERA
-      </button>
-
-      {/* Terminal Log */}
-      <div
-        className="border-2 rounded p-4 space-y-1 min-h-[120px]"
-        style={{
-          borderColor: '#00ff9c',
-          backgroundColor: 'rgba(0, 255, 156, 0.05)'
-        }}>
-
-        <div className="text-xs mb-2 opacity-70">SYSTEM LOG:</div>
-        {logs.map((log, index) =>
-          <div key={index} className="text-xs font-mono">
-            {"\u003E"} {log}
-          </div>
-        )}
-      </div>
-
-      <style>{`
         @keyframes float {
-          0%, 100% { transform: translateY(0) translateX(-50%); }
-          50% { transform: translateY(-20px) translateX(-50%); }
+          0%, 100% { transform: translateY(-50%) translateX(-50%); }
+          50% { transform: translateY(calc(-50% - 20px)) translateX(-50%); }
         }
         @keyframes pulse {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.8; }
         }
+        @keyframes spin {
+          100% { transform: rotate(360deg) scale(0); opacity: 0; }
+        }
       `}</style>
-    </div>);
+      </div>
+    </div>
+  );
 
 }
