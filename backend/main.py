@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import math
+import database
 
 # Initialize the app
 app = FastAPI(title="Ghostbusters API")
@@ -21,11 +22,10 @@ class PlayerLocation(BaseModel):
     lat: float
     lon: float
 
-# --- 2. THE MATH ENGINE (Your Territory) ---
+# math engine
 def get_distance(lat1, lon1, lat2, lon2):
     """
     Calculates distance. Uses Haversine for GPS coordinates.
-    (If your team chooses a 2D simulation, you can swap this for simple Pythagorean math).
     """
     R = 6371000  # Radius of Earth in meters
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
@@ -44,16 +44,17 @@ def calculate_flee_vector(p_lat, p_lon, g_lat, g_lon):
     # 1.5 multiplier pushes it 50% further away
     return g_lat + (v_lat * 1.5), g_lon + (v_lon * 1.5)
 
-# --- 3. API ENDPOINTS ---
+# api endpoints
 
 @app.get("/")
 def health_check():
     return {"status": "online", "message": "Ghostbusters Backend is running!"}
 
-@app.post("/scan")
-def scan_for_ghosts(player: PlayerLocation):
-    # HARDCODED GHOST for you to test with right now.
-    # Tell your DB partner to write a function that replaces this with a real database query later!
+@app.post("/radar")
+def radar_scan(player: PlayerLocation):
+    """Passive scan. Tells the player how close they are without spooking the ghost."""
+    # HARDCODED GHOST for test 
+    # DB partner: replace this with coordinates of ghost queried from the db
     nearest_ghost = {
         "id": 1, 
         "type": "Poltergeist", 
@@ -61,34 +62,67 @@ def scan_for_ghosts(player: PlayerLocation):
         "lon": 77.5653 
     }
     
-    # Calculate how far the player is from the ghost
+    distance = get_distance(player.lat, player.lon, nearest_ghost["lat"], nearest_ghost["lon"])
+    
+    # Signal strength based on distance
+    if distance <= 15:
+        signal = "Strong (Very close!)"
+    elif distance <= 50:
+        signal = "Medium (Getting warmer...)"
+    elif distance <= 150:
+        signal = "Weak (Faint reading)"
+    else:
+        signal = "None (No EMF detected)"
+        
+    return {
+        "status": "radar_ping",
+        "signal_strength": signal,
+        "distance_meters": round(distance)
+    }
+
+@app.post("/capture")
+def capture_ghost(player: PlayerLocation):
+    """Active catch attempt. If you miss, you might spook the ghost."""
+    # HARDCODED GHOST for test 
+    # DB partner: replace this with coordinates of ghost queried from the db
+    nearest_ghost = {
+        "id": 1, 
+        "type": "Poltergeist", 
+        "lat": 13.0285, # Rough coordinates for MSRIT area
+        "lon": 77.5653 
+    }
+    
     distance = get_distance(player.lat, player.lon, nearest_ghost["lat"], nearest_ghost["lon"])
     
     # LOGIC 1: Player is right on top of it (Busted!)
     if distance <= 5:
-        # TODO: Tell DB partner to write a function to add points to the user here
+        # DB: Add points to the user (let's say 100 points for a Poltergeist)
+        new_score = database.add_points(player.username, 100)
+        
         return {
             "status": "busted",
             "message": f"You trapped the {nearest_ghost['type']}!",
-            "distance_meters": round(distance)
+            "distance_meters": round(distance),
+            "points_earned": 100,
+            "total_points": new_score
         }
         
-    # LOGIC 2: Player got too close (Anti-Gravity Triggered!)
+    # LOGIC 2: Player swung the trap but was too far away, and ghost flees!
     elif distance <= 30:
         new_lat, new_lon = calculate_flee_vector(player.lat, player.lon, nearest_ghost["lat"], nearest_ghost["lon"])
-        # TODO: Tell DB partner to update the database with these new coordinates
+        # TODO: DB partner to update the database with these new coordinates
         return {
             "status": "spooked",
-            "message": "Your EMF meter spooked it! The ghost fled.",
+            "message": "You missed your trap! The ghost got spooked and fled.",
             "new_lat": new_lat,
             "new_lon": new_lon,
             "distance_meters": round(distance)
         }
         
-    # LOGIC 3: Player is too far away
+    # LOGIC 3: Player swung their trap at totally empty air.
     else:
         return {
-            "status": "clear",
-            "message": "EMF meter is quiet. Keep searching.",
+            "status": "missed",
+            "message": "You swung your trap at nothing!",
             "distance_meters": round(distance)
         }
