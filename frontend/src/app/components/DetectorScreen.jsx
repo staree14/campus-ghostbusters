@@ -360,6 +360,7 @@ export function DetectorScreen({ agentName }) {
         }
       `}</style>
       </div>
-      );
+    </div>
+  );
 
 }
