@@ -8,6 +8,8 @@ from db.database import engine, Base, get_db
 from models import user, ghost
 from schemas.radar_schema import RadarRequest  # Ensure these match your filenames
 from schemas.capture_schema import CaptureRequest
+from schemas.user_schema import UserCreate
+from ml.spawner import generate_ghosts_near_player
 
 app = FastAPI(title="Ghostbusters Pro API")
 
@@ -40,30 +42,32 @@ def calculate_flee_vector(p_lat, p_lon, g_lat, g_lon):
 
 @app.post("/spawn")
 def spawn_ghosts(data: RadarRequest, db: Session = Depends(get_db)):
-    """Generates 4 ghosts near the player and SAVES them to DB"""
-    ghost_types = ["Poltergeist", "Banshee", "Phantom", "Specter", "Wraith"]
+
+    generated_ghosts = generate_ghosts_near_player(
+        player_lat=data.lat,
+        player_lon=data.lon,
+        count=4
+    )
+
     new_ghosts = []
-    R = 6371000
-    
-    for _ in range(4):
-        dist = random.uniform(5, 25) # meters
-        brng = math.radians(random.uniform(0, 360))
-        lat1, lon1 = math.radians(data.lat), math.radians(data.lon)
-        
-        lat2 = math.asin(math.sin(lat1) * math.cos(dist/R) + math.cos(lat1) * math.sin(dist/R) * math.cos(brng))
-        lon2 = lon1 + math.atan2(math.sin(brng) * math.sin(dist/R) * math.cos(lat1), math.cos(dist/R) - math.sin(lat1) * math.sin(lat2))
-        
+
+    for g in generated_ghosts:
         db_ghost = ghost.Ghost(
-            type=random.choice(ghost_types),
-            lat=math.degrees(lat2),
-            lon=math.degrees(lon2),
+            type=g["type"],
+            lat=g["lat"],
+            lon=g["lon"],
             captured=False
         )
+
         db.add(db_ghost)
         new_ghosts.append(db_ghost)
-    
+
     db.commit()
-    return {"status": "success", "message": "4 ghosts spawned and saved to DB!"}
+
+    return {
+        "status": "success",
+        "message": "4 ghosts spawned and saved to DB!"
+    }
 
 @app.post("/radar")
 def radar(data: RadarRequest, db: Session = Depends(get_db)):
@@ -100,3 +104,31 @@ def capture(data: CaptureRequest, db: Session = Depends(get_db)):
         return {"status": "spooked", "message": "The ghost fled!"}
 
     return {"status": "missed", "message": "Too far away!"}
+@app.post("/create-user")
+def create_user(data: UserCreate, db: Session = Depends(get_db)):
+
+    # check if username already exists
+    existing = db.query(user.User).filter(user.User.username == data.username).first()
+
+    if existing:
+        return {
+            "status": "exists",
+            "user_id": existing.id,
+            "points": existing.points
+        }
+
+    new_user = user.User(
+        username=data.username,
+        points=0
+    )
+
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    return {
+        "status": "created",
+        "user_id": new_user.id,
+        "username": new_user.username,
+        "points": new_user.points
+    }
