@@ -1,128 +1,102 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 import math
-import database
+import random
+from fastapi import FastAPI, Depends, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
 
-# Initialize the app
-app = FastAPI(title="Ghostbusters API")
+from db.database import engine, Base, get_db
+from models import user, ghost
+from schemas.radar_schema import RadarRequest  # Ensure these match your filenames
+from schemas.capture_schema import CaptureRequest
 
-#Allow the React frontend to talk to this backend
+app = FastAPI(title="Ghostbusters Pro API")
+
+# 1. Enable CORS so React/Mobile can connect
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins for small projects
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# data validation, pydantic models
-class PlayerLocation(BaseModel):
-    username: str
-    lat: float
-    lon: float
+Base.metadata.create_all(bind=engine)
 
-# math engine
-def get_distance(lat1, lon1, lat2, lon2):
-    """
-    Calculates distance. Uses Haversine for GPS coordinates.
-    """
-    R = 6371000  # Radius of Earth in meters
+# --- MATH UTILITIES ---
+
+def haversine(lat1, lon1, lat2, lon2):
+    R = 6371000
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     dphi = math.radians(lat2 - lat1)
     dlambda = math.radians(lon2 - lon1)
-    
     a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return R * c
+    return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1-a))
 
 def calculate_flee_vector(p_lat, p_lon, g_lat, g_lon):
-    """Pushes the ghost further away along the same vector."""
-    v_lat = g_lat - p_lat
-    v_lon = g_lon - p_lon
+    """Pushes ghost 50% further away if spooked"""
+    return g_lat + (g_lat - p_lat) * 1.5, g_lon + (g_lon - p_lon) * 1.5
+
+# --- API ENDPOINTS ---
+
+@app.post("/spawn")
+def spawn_ghosts(data: RadarRequest, db: Session = Depends(get_db)):
+    """Generates 4 ghosts near the player and SAVES them to DB"""
+    ghost_types = ["Poltergeist", "Banshee", "Phantom", "Specter", "Wraith"]
+    new_ghosts = []
+    R = 6371000
     
-    # 1.5 multiplier pushes it 50% further away
-    return g_lat + (v_lat * 1.5), g_lon + (v_lon * 1.5)
-
-# api endpoints
-
-@app.get("/")
-def health_check():
-    return {"status": "online", "message": "Ghostbusters Backend is running!"}
+    for _ in range(4):
+        dist = random.uniform(5, 25) # meters
+        brng = math.radians(random.uniform(0, 360))
+        lat1, lon1 = math.radians(data.lat), math.radians(data.lon)
+        
+        lat2 = math.asin(math.sin(lat1) * math.cos(dist/R) + math.cos(lat1) * math.sin(dist/R) * math.cos(brng))
+        lon2 = lon1 + math.atan2(math.sin(brng) * math.sin(dist/R) * math.cos(lat1), math.cos(dist/R) - math.sin(lat1) * math.sin(lat2))
+        
+        db_ghost = ghost.Ghost(
+            type=random.choice(ghost_types),
+            lat=math.degrees(lat2),
+            lon=math.degrees(lon2),
+            captured=False
+        )
+        db.add(db_ghost)
+        new_ghosts.append(db_ghost)
+    
+    db.commit()
+    return {"status": "success", "message": "4 ghosts spawned and saved to DB!"}
 
 @app.post("/radar")
-def radar_scan(player: PlayerLocation):
-    """Passive scan. Tells the player how close they are without spooking the ghost."""
-    # HARDCODED GHOST for test 
-    # DB partner: replace this with coordinates of ghost queried from the db
-    nearest_ghost = {
-        "id": 1, 
-        "type": "Poltergeist", 
-        "lat": 13.0285, # Rough coordinates for MSRIT area
-        "lon": 77.5653 
-    }
-    
-    distance = get_distance(player.lat, player.lon, nearest_ghost["lat"], nearest_ghost["lon"])
-    
-    # Signal strength based on distance
-    if distance <= 15:
-        signal = "Strong (Very close!)"
-    elif distance <= 50:
-        signal = "Medium (Getting warmer...)"
-    elif distance <= 150:
-        signal = "Weak (Faint reading)"
-    else:
-        signal = "None (No EMF detected)"
-        
-    return {
-        "status": "radar_ping",
-        "signal_strength": signal,
-        "distance_meters": round(distance)
-    }
+def radar(data: RadarRequest, db: Session = Depends(get_db)):
+    ghosts = db.query(ghost.Ghost).filter(ghost.Ghost.captured == False).all()
+    nearby = []
+    for g in ghosts:
+        dist = haversine(data.lat, data.lon, g.lat, g.lon)
+        if dist < 150:
+            nearby.append({
+                "id": g.id, "type": g.type, "distance": round(dist, 2),
+                "signal": "Strong" if dist < 20 else "Medium" if dist < 50 else "Weak"
+            })
+    return {"ghosts": nearby}
 
 @app.post("/capture")
-def capture_ghost(player: PlayerLocation):
-    """Active catch attempt. If you miss, you might spook the ghost."""
-    # HARDCODED GHOST for test 
-    # DB partner: replace this with coordinates of ghost queried from the db
-    nearest_ghost = {
-        "id": 1, 
-        "type": "Poltergeist", 
-        "lat": 13.0285, # Rough coordinates for MSRIT area
-        "lon": 77.5653 
-    }
-    
-    distance = get_distance(player.lat, player.lon, nearest_ghost["lat"], nearest_ghost["lon"])
-    
-    # LOGIC 1: Player is right on top of it (Busted!)
-    if distance <= 5:
-        # DB: Add points to the user (let's say 100 points for a Poltergeist)
-        new_score = database.add_points(player.username, 100)
-        
-        return {
-            "status": "busted",
-            "message": f"You trapped the {nearest_ghost['type']}!",
-            "distance_meters": round(distance),
-            "points_earned": 100,
-            "total_points": new_score
-        }
-        
-    # LOGIC 2: Player swung the trap but was too far away, and ghost flees!
-    elif distance <= 30:
-        new_lat, new_lon = calculate_flee_vector(player.lat, player.lon, nearest_ghost["lat"], nearest_ghost["lon"])
-        # TODO: DB partner to update the database with these new coordinates
-        return {
-            "status": "spooked",
-            "message": "You missed your trap! The ghost got spooked and fled.",
-            "new_lat": new_lat,
-            "new_lon": new_lon,
-            "distance_meters": round(distance)
-        }
-        
-    # LOGIC 3: Player swung their trap at totally empty air.
-    else:
-        return {
-            "status": "missed",
-            "message": "You swung your trap at nothing!",
-            "distance_meters": round(distance)
-        }
+def capture(data: CaptureRequest, db: Session = Depends(get_db)):
+    g = db.query(ghost.Ghost).filter(ghost.Ghost.id == data.ghost_id).first()
+    if not g or g.captured:
+        return {"status": "error", "message": "Ghost not found or already caught"}
+
+    dist = haversine(data.lat, data.lon, g.lat, g.lon)
+
+    if dist <= 7:  # SUCCESS
+        g.captured = True
+        u = db.query(user.User).filter(user.User.id == data.user_id).first()
+        if u: u.points += 100
+        db.commit()
+        return {"status": "busted", "points": 100}
+
+    elif dist <= 30:  # SPOOKED
+        new_lat, new_lon = calculate_flee_vector(data.lat, data.lon, g.lat, g.lon)
+        g.lat, g.lon = new_lat, new_lon
+        db.commit()
+        return {"status": "spooked", "message": "The ghost fled!"}
+
+    return {"status": "missed", "message": "Too far away!"}
