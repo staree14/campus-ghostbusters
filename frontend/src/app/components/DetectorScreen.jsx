@@ -19,24 +19,6 @@ function getDistanceInMeters(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
-// Generate a random ghost position 10-15 meters away from origin
-function generateGhostPosition(lat, lon) {
-  const R = 6371e3;
-  // random distance 10m to 15m (closer for easier testing)
-  const distance = Math.random() * 5 + 10;
-  // random bearing 0 to 360 degrees
-  const brng = Math.random() * 360 * Math.PI / 180;
-
-  const lat1 = lat * Math.PI / 180;
-  const lon1 = lon * Math.PI / 180;
-
-  const lat2 = Math.asin(Math.sin(lat1) * Math.cos(distance / R) +
-    Math.cos(lat1) * Math.sin(distance / R) * Math.cos(brng));
-  const lon2 = lon1 + Math.atan2(Math.sin(brng) * Math.sin(distance / R) * Math.cos(lat1),
-    Math.cos(distance / R) - Math.sin(lat1) * Math.sin(lat2));
-
-  return { lat: lat2 * 180 / Math.PI, lon: lon2 * 180 / Math.PI };
-}
 
 export function DetectorScreen({ agentName }) {
   const [signalStrength, setSignalStrength] = useState('none');
@@ -57,6 +39,36 @@ export function DetectorScreen({ agentName }) {
       setRotation((prev) => (prev + 2) % 360);
     }, 30);
     return () => clearInterval(interval);
+  }, []);
+
+  // Fetch true ghost position from backend
+  useEffect(() => {
+    let mounted = true;
+    const fetchGhostPosition = async () => {
+      try {
+        const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000';
+        const response = await fetch(`${backendUrl}/ghost`);
+        if (!response.ok) throw new Error('Failed to fetch ghost location');
+        const data = await response.json();
+
+        // Assuming the backend returns an object with lat and lon
+        if (mounted && data.lat !== undefined && data.lon !== undefined) {
+          setGhostPos({ lat: data.lat, lon: data.lon });
+        }
+      } catch (err) {
+        setLogs((prev) => [...prev.slice(-4), 'ERROR: BACKEND SYNC FAILED'].slice(-5));
+        console.error('Ghost fetch error:', err);
+      }
+    };
+
+    fetchGhostPosition();
+    // Poll for ghost updates every 10 seconds in case it moves
+    const interval = setInterval(fetchGhostPosition, 10000);
+
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
   }, []);
 
   // Always-on Camera
@@ -95,11 +107,9 @@ export function DetectorScreen({ agentName }) {
         const { latitude, longitude, accuracy } = position.coords;
 
         let currentGhost = ghostPos;
-        // Generate ghost if not present
+        // Wait for ghost position to be fetched from backend
         if (!currentGhost) {
-          currentGhost = generateGhostPosition(latitude, longitude);
-          setGhostPos(currentGhost);
-          setLogs((prev) => [...prev.slice(-4), `GPS LOCK (${accuracy.toFixed(0)}m acc)`, 'SCANNING AREA...'].slice(-5));
+          return;
         }
 
         // Calculate distance
@@ -155,7 +165,7 @@ export function DetectorScreen({ agentName }) {
       setCaptured(false);
       setSignalStrength('none');
       setGhostVisible(false);
-      setGhostPos(null); // Reset ghost position so a new one spawns next tick
+      // We don't nullify ghostPos here because the backend handles spawning an entity
       setLogs((prev) => [...prev.slice(-4), 'RESUMING SCAN FOR NEW ENTITIES...'].slice(-5));
     }, 3000);
   };
