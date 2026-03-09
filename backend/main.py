@@ -104,6 +104,27 @@ def capture(data: CaptureRequest, db: Session = Depends(get_db)):
         return {"status": "spooked", "message": "The ghost fled!"}
 
     return {"status": "missed", "message": "Too far away!"}
+
+@app.get("/ghost")
+def get_ghost(db: Session = Depends(get_db)):
+    # Find any uncaptured ghost
+    ghosts = db.query(ghost.Ghost).filter(ghost.Ghost.captured == False).all()
+    
+    if not ghosts:
+        # If no ghosts exist, return a default position or error
+        # Returning a 404 or a dummy ghost based on frontend needs
+        return {"lat": 0.0, "lon": 0.0, "message": "No ghosts currently spawned"}
+        
+    # Return a random uncaptured ghost so the radar has something to lock onto
+    target_ghost = random.choice(ghosts)
+    
+    return {
+        "id": target_ghost.id,
+        "lat": target_ghost.lat,
+        "lon": target_ghost.lon,
+        "type": target_ghost.type
+    }
+
 @app.post("/create-user")
 def create_user(data: UserCreate, db: Session = Depends(get_db)):
 
